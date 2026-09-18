@@ -238,18 +238,21 @@
 
   function SPRITE_MARGIN(zoom) { return World.SPRITE_H * zoom + 20; }
 
+  const STEP_MS = 170; // 발 하나를 유지하는 시간. 고전 RPG처럼 두 자세를 딱딱 전환한다(부드럽게 보간하지 않음)
+
   function drawSprites(sprites, zoom, offsetX, cssH) {
     const margin = SPRITE_MARGIN(zoom);
     const now = Date.now();
+    const frame = Math.floor(now / STEP_MS) % 2;
+    const phase = frame === 0 ? 1 : -1;
+    const bob = frame === 0 ? -Math.round(zoom) : 0;
     for (const p of sprites) {
       const { sx, sy } = worldToScreen(p.x, p.y, zoom, offsetX);
       if (sy < -margin || sy > cssH + margin) continue;
       const alpha = p.alpha === undefined ? 1 : p.alpha;
       if (alpha < 1) ctx.globalAlpha = alpha;
       if (p.moving) {
-        // 걷는 중일 땐 캐시를 안 쓰고 그 순간의 다리·팔 자세로 새로 그린다 + 살짝 통통 튄다
-        const phase = Math.sin(now * 0.012);
-        const bob = -Math.round(Math.abs(phase) * Math.max(1, zoom * 0.6));
+        // 걷는 중일 땐 캐시를 안 쓰고 이번 프레임의 다리·팔 자세로 새로 그린다
         S.drawTo(ctx, p.entry.attrs, zoom, Math.round(sx), Math.round(sy) + bob, undefined, phase);
       } else {
         ensureGrid(p.entry);
@@ -407,18 +410,14 @@
     ctx.closePath();
   }
 
+  // 하객이 계속 서성이고 있어서 사실상 매 프레임 다시 그려야 한다. 예전엔 배터리를
+  // 아끼려고 90ms(약 11fps)마다만 그렸는데, 그게 오히려 "뚝뚝 끊기는" 느낌의
+  // 주된 원인이었다. 화면이 보이는 동안은 화면 주사율(보통 60fps)에 맞춰 매끄럽게 그린다.
   function loop() {
-    if (needsDraw) { needsDraw = false; draw(); }
+    if (state.gatherEvent && Date.now() > state.gatherEvent.until) state.gatherEvent = null;
+    if (!document.hidden) draw();
     requestAnimationFrame(loop);
   }
-
-  // 하객이 제자리에서 서성이는 걸 계속 보여주려면 매 프레임 다시 그려야 한다.
-  // 배터리를 아끼려고 화면이 안 보일 땐 멈추고, 그 외엔 draw()를 계속 요청한다.
-  function ambientTick() {
-    if (state.gatherEvent && Date.now() > state.gatherEvent.until) state.gatherEvent = null;
-    if (!document.hidden) markDirty(false);
-  }
-  setInterval(ambientTick, 90);
 
   /* ---------------- 카메라 조작 (화면을 끌면 카메라가 움직인다) ---------------- */
 
