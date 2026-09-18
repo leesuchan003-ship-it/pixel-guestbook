@@ -33,6 +33,10 @@
     myId: localStorage.getItem('pg_my_id') || null,
     myPos: null,               // 내 캐릭터의 실제 좌표(조이스틱으로 이동)
     joyVec: { x: 0, y: 0 },
+    knownIds: null,            // 처음 로드된 하객 집합(이 이후 들어온 사람만 등장 연출)
+    spawnAt: new Map(),        // entryId -> 등장한 시각 (입장 팝인 애니메이션용)
+    enteringId: null,          // 방금 등록한 사람: "입장 대기 중..." 말풍선을 잠깐 보여준다
+    enteringUntil: 0,
     adminKey: sessionStorage.getItem('pg_admin') || null,
     draft: null,
     candidates: [],
@@ -165,13 +169,30 @@
 
   function SPRITE_MARGIN(zoom) { return World.SPRITE_H * zoom + 20; }
 
+  const SPAWN_MS = 500; // 새 하객이 등장할 때 발밑에서부터 커지는 팝인 시간
+
   function drawSprites(sprites, zoom, offsetX, cssH) {
     const margin = SPRITE_MARGIN(zoom);
+    const now = Date.now();
     for (const p of sprites) {
       const { sx, sy } = worldToScreen(p.x, p.y, zoom, offsetX);
       if (sy < -margin || sy > cssH + margin) continue;
       ensureGrid(p.entry);
-      S.drawTo(ctx, p.entry.attrs, zoom, Math.round(sx), Math.round(sy));
+
+      const spawnT = state.spawnAt.get(p.entry.id);
+      if (spawnT === undefined) {
+        S.drawTo(ctx, p.entry.attrs, zoom, Math.round(sx), Math.round(sy));
+        continue;
+      }
+      const t = Math.min(1, (now - spawnT) / SPAWN_MS);
+      if (t >= 1) { state.spawnAt.delete(p.entry.id); }
+      // 발밑(바닥) 기준으로 작았다가 커지면서 서서히 나타난다
+      const fullW = World.SPRITE_W * zoom, fullH = World.SPRITE_H * zoom;
+      const eff = 0.55 + 0.45 * t;
+      const w = fullW * eff, h = fullH * eff;
+      ctx.globalAlpha = 0.2 + 0.8 * t;
+      S.drawTo(ctx, p.entry.attrs, zoom * eff, Math.round(sx + (fullW - w) / 2), Math.round(sy + (fullH - h)));
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -212,7 +233,17 @@
     const shown = new Set();
     const toDraw = [];
     const autoCandidates = [];
+
+    // 방금 등록한 사람은 실제 메시지보다 "입장 대기 중..."을 잠깐 먼저 보여준다
+    if (state.enteringId && state.enteringUntil > now) {
+      const enter = sprites.find((p) => p.entry.id === state.enteringId);
+      if (enter) { toDraw.push({ p: enter, msg: '입장 대기 중...' }); shown.add(state.enteringId); }
+    } else if (state.enteringId) {
+      state.enteringId = null;
+    }
+
     for (const p of sprites) {
+      if (shown.has(p.entry.id)) continue;
       const msg = (p.entry.message || '').trim();
       if (!msg) continue;
       const forced = (state.bubbles.get(p.entry.id) || 0) > now;
@@ -482,6 +513,20 @@
     const prevIds = state.entries.map((e) => e.id).join(',');
     state.entries = data.entries || [];
     const changed = prevIds !== state.entries.map((e) => e.id).join(',');
+
+    // 처음 접속했을 때 이미 있던 하객들은 팝인 없이 그대로 보여주고,
+    // 그 이후에 새로 들어온 사람만 등장 애니메이션을 태운다
+    if (!state.knownIds) {
+      state.knownIds = new Set(state.entries.map((e) => e.id));
+    } else {
+      for (const e of state.entries) {
+        if (!state.knownIds.has(e.id)) {
+          state.knownIds.add(e.id);
+          state.spawnAt.set(e.id, Date.now());
+        }
+      }
+    }
+
     $('#bannerText').textContent = state.config.title || '단 한 번뿐인 결혼식';
     document.title = state.config.title || '픽셀 방명록';
     $('#counter').innerHTML = '하객 <b>' + state.entries.length + '</b>명';
@@ -750,8 +795,10 @@
       state.myId = created.id;
       state.myPos = null; // rebuildHomes에서 새 자리로 다시 잡는다
       localStorage.setItem('pg_my_id', created.id);
+      state.enteringId = created.id;
+      state.enteringUntil = Date.now() + 1600;
       await refresh();
-      if (message) state.bubbles.set(created.id, Date.now() + 5000);
+      if (message) state.bubbles.set(created.id, Date.now() + 5600);
       drawPreview($('#donePreview'), state.draft, 3);
       showStep('done');
       focusEntry(created.id);
