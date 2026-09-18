@@ -37,6 +37,7 @@
     spawnAt: new Map(),        // entryId -> 등장한 시각 (입장 팝인 애니메이션용)
     enteringId: null,          // 방금 등록한 사람: "입장 대기 중..." 말풍선을 잠깐 보여준다
     enteringUntil: 0,
+    gatherEvent: null,         // 새 하객이 도착하면 주변 하객들이 잠깐 모여드는 연출
     adminKey: sessionStorage.getItem('pg_admin') || null,
     draft: null,
     candidates: [],
@@ -83,15 +84,37 @@
     };
   }
 
+  // 새 하객이 도착하면 근처 하객들이 잠깐 그쪽으로 다가갔다가(0→strength) 돌아오는(→0)
+  // 삼각형 모양의 진행도를 계산한다.
+  function gatherFactor(g, now) {
+    const total = g.until - g.start;
+    const half = total / 2;
+    const elapsed = now - g.start;
+    const f = elapsed < half ? elapsed / half : 1 - (elapsed - half) / half;
+    return Math.max(0, Math.min(1, f)) * g.strength;
+  }
+
   // 지금 이 순간(now)의 실제 화면 좌표. 내 캐릭터는 조이스틱 위치, 나머지는 제자리 서성임.
   // 막 등록된 사람은 버진로드 입구에서 자기 자리까지 걸어가는 중간 지점을 돌려준다.
   function currentPos(id, home, now) {
-    let target;
-    if (id === state.myId && state.myPos) target = state.myPos;
-    else { const w = World.wanderOffset(id, now); target = { x: home.x + w.dx, y: home.y + w.dy }; }
+    let target, moving = false;
+    if (id === state.myId && state.myPos) {
+      target = state.myPos;
+      if (Math.abs(state.joyVec.x) > 0.05 || Math.abs(state.joyVec.y) > 0.05) moving = true;
+    } else {
+      const w = World.wanderOffset(id, now);
+      target = { x: home.x + w.dx, y: home.y + w.dy };
+    }
+
+    const g = state.gatherEvent;
+    if (g && now <= g.until && g.participants.has(id)) {
+      const f = gatherFactor(g, now);
+      if (f > 0.03) moving = true;
+      target = { x: target.x + (g.targetX - target.x) * f, y: target.y + (g.targetY - target.y) * f };
+    }
 
     const spawnT = state.spawnAt.get(id);
-    if (spawnT === undefined) return { x: target.x, y: target.y, alpha: 1 };
+    if (spawnT === undefined) return { x: target.x, y: target.y, alpha: 1, moving };
 
     const elapsed = now - spawnT;
     const t = Math.min(1, elapsed / SPAWN_MS);
@@ -101,6 +124,7 @@
       x: ENTRY_X + (target.x - ENTRY_X) * ease,
       y: ENTRY_Y + (target.y - ENTRY_Y) * ease,
       alpha: Math.min(1, elapsed / FADE_MS),
+      moving: true,
     };
   }
 
@@ -110,10 +134,34 @@
       const home = state.homes.get(entry.id);
       if (!home) continue;
       const pos = currentPos(entry.id, home, now);
-      out.push({ entry, x: pos.x, y: pos.y, alpha: pos.alpha });
+      out.push({ entry, x: pos.x, y: pos.y, alpha: pos.alpha, moving: pos.moving });
     }
     out.sort((a, b) => (a.y - b.y));
     return out;
+  }
+
+  // 새 하객 근처의 몇 명을 골라 잠깐 모여들게 한다("다 같이 모여서 환영해줍니다" 연출)
+  function startGatherEvent(newId) {
+    const homeNew = state.homes.get(newId);
+    if (!homeNew) return;
+    const dists = [];
+    for (const e of state.entries) {
+      if (e.id === newId) continue;
+      const h = state.homes.get(e.id);
+      if (!h) continue;
+      dists.push({ id: e.id, d: Math.hypot(h.x - homeNew.x, h.y - homeNew.y) });
+    }
+    dists.sort((a, b) => a.d - b.d);
+    const chosen = dists.slice(0, 8);
+    if (!chosen.length) return;
+    state.gatherEvent = {
+      start: Date.now(),
+      until: Date.now() + 2600,
+      targetX: homeNew.x,
+      targetY: homeNew.y,
+      strength: 0.72,
+      participants: new Set(chosen.map((o) => o.id)),
+    };
   }
 
   /* ---------------- 월드 렌더링 ---------------- */
@@ -192,13 +240,21 @@
 
   function drawSprites(sprites, zoom, offsetX, cssH) {
     const margin = SPRITE_MARGIN(zoom);
+    const now = Date.now();
     for (const p of sprites) {
       const { sx, sy } = worldToScreen(p.x, p.y, zoom, offsetX);
       if (sy < -margin || sy > cssH + margin) continue;
-      ensureGrid(p.entry);
       const alpha = p.alpha === undefined ? 1 : p.alpha;
       if (alpha < 1) ctx.globalAlpha = alpha;
-      S.drawTo(ctx, p.entry.attrs, zoom, Math.round(sx), Math.round(sy));
+      if (p.moving) {
+        // 걷는 중일 땐 캐시를 안 쓰고 그 순간의 다리·팔 자세로 새로 그린다 + 살짝 통통 튄다
+        const phase = Math.sin(now * 0.012);
+        const bob = -Math.round(Math.abs(phase) * Math.max(1, zoom * 0.6));
+        S.drawTo(ctx, p.entry.attrs, zoom, Math.round(sx), Math.round(sy) + bob, undefined, phase);
+      } else {
+        ensureGrid(p.entry);
+        S.drawTo(ctx, p.entry.attrs, zoom, Math.round(sx), Math.round(sy));
+      }
       if (alpha < 1) ctx.globalAlpha = 1;
     }
   }
@@ -315,21 +371,27 @@
       placed.push(box);
     }
 
-    ctx.fillStyle = 'rgba(10,12,14,0.92)';
-    ctx.strokeStyle = '#f2f0ea';
-    ctx.lineWidth = 2;
-    roundRect(bx, by, w, h, 8);
+    // RPG 대사창 스타일: 흰 바탕 + 검은 글씨 + 살짝 오프셋된 그림자(픽셀 게임 느낌)
+    ctx.fillStyle = 'rgba(20,18,10,0.28)';
+    roundRect(bx + 3, by + 4, w, h, 9);
+    ctx.fill();
+
+    ctx.fillStyle = '#fbf8f0';
+    ctx.strokeStyle = '#20201c';
+    ctx.lineWidth = 2.4;
+    roundRect(bx, by, w, h, 9);
     ctx.fill();
     ctx.stroke();
     ctx.beginPath();
-    ctx.moveTo(anchor.sx - 5, by + h - 1);
-    ctx.lineTo(anchor.sx + 5, by + h - 1);
-    ctx.lineTo(anchor.sx, by + h + 7);
+    ctx.moveTo(anchor.sx - 6, by + h - 2);
+    ctx.lineTo(anchor.sx + 6, by + h - 2);
+    ctx.lineTo(anchor.sx, by + h + 8);
     ctx.closePath();
-    ctx.fillStyle = 'rgba(10,12,14,0.92)';
+    ctx.fillStyle = '#fbf8f0';
     ctx.fill();
+    ctx.stroke();
 
-    ctx.fillStyle = '#f2f0ea';
+    ctx.fillStyle = '#1c1a14';
     ctx.textAlign = 'left';
     lines.forEach((l, i) => ctx.fillText(l, bx + 9, by + 10 + lineH * (i + 0.72)));
     ctx.textAlign = 'center';
@@ -353,6 +415,7 @@
   // 하객이 제자리에서 서성이는 걸 계속 보여주려면 매 프레임 다시 그려야 한다.
   // 배터리를 아끼려고 화면이 안 보일 땐 멈추고, 그 외엔 draw()를 계속 요청한다.
   function ambientTick() {
+    if (state.gatherEvent && Date.now() > state.gatherEvent.until) state.gatherEvent = null;
     if (!document.hidden) markDirty(false);
   }
   setInterval(ambientTick, 90);
@@ -530,6 +593,7 @@
         if (!state.knownIds.has(e.id)) {
           state.knownIds.add(e.id);
           state.spawnAt.set(e.id, Date.now());
+          setTimeout(() => startGatherEvent(e.id), SPAWN_MS + 150);
         }
       }
     }

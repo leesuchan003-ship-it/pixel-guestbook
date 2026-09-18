@@ -213,18 +213,22 @@
     }
   }
 
-  function legsAndShoes(g, c) {
+  // walk: -1..1. 0이면 정지 자세, 값이 있으면 한쪽 다리가 살짝 짧아져(발을 든 것처럼)
+  // 걷는 것처럼 보인다. walk의 부호가 바뀔 때마다 반대쪽 다리가 앞으로 나간다.
+  function legsAndShoes(g, c, walk) {
     const bottom = c.bottomColor;
     const bdark = shade(bottom, -0.2);
     const shoe = c.shoeColor;
+    const step = walk || 0;
     if (c.outfit === 'dress' || c.bottom === 'skirt') {
-      // 치마: 허리에서 무릎까지 퍼지는 실루엣
+      // 치마: 허리에서 무릎까지 퍼지는 실루엣. 살짝 좌우로 흔들리게만 표현한다
       const skirtColor = c.outfit === 'dress' ? c.topColor : bottom;
+      const sway = Math.round(step * 1);
       for (let y = 33; y <= 43; y++) {
         const spread = Math.floor((y - 33) / 2);
-        g.row(y, 10 - spread, 21 + spread, y % 4 === 3 ? shade(skirtColor, -0.14) : skirtColor);
+        g.row(y, 10 - spread + sway, 21 + spread + sway, y % 4 === 3 ? shade(skirtColor, -0.14) : skirtColor);
       }
-      g.row(44, 7, 24, shade(skirtColor, -0.3));
+      g.row(44, 7 + sway, 24 + sway, shade(skirtColor, -0.3));
       g.rect(12, 45, 3, 4, c.skin);
       g.rect(17, 45, 3, 4, c.skin);
       g.rect(17, 45, 3, 4, shade(c.skin, -0.1));
@@ -232,14 +236,16 @@
       g.rect(16, 49, 4, 2, shade(shoe, -0.12));
       return;
     }
-    g.rect(11, 35, 10, 4, bottom);       // 골반
-    g.rect(11, 39, 4, 10, bottom);       // 왼다리
-    g.rect(17, 39, 4, 10, shade(bottom, -0.1));
-    g.rect(15, 35, 2, 14, bdark);        // 가랑이 라인
-    g.rect(11, 49, 5, 2, shoe);
-    g.rect(16, 49, 5, 2, shade(shoe, -0.12));
-    g.row(48, 11, 14, shade(bottom, -0.18));
-    g.row(48, 17, 20, shade(bottom, -0.18));
+    const lLift = Math.max(0, Math.round(-step * 2));  // 왼다리가 뒤로 갈 때(step<0) 발을 든다
+    const rLift = Math.max(0, Math.round(step * 2));   // 오른다리가 뒤로 갈 때(step>0) 발을 든다
+    g.rect(11, 35, 10, 4, bottom);                      // 골반
+    g.rect(11, 39, 4, 10 - lLift, bottom);               // 왼다리
+    g.rect(17, 39, 4, 10 - rLift, shade(bottom, -0.1));  // 오른다리
+    g.rect(15, 35, 2, 14 - Math.max(lLift, rLift), bdark); // 가랑이 라인
+    g.rect(11, 49 - lLift, 5, 2, shoe);
+    g.rect(16, 49 - rLift, 5, 2, shade(shoe, -0.12));
+    g.row(48 - lLift, 11, 14, shade(bottom, -0.18));
+    g.row(48 - rLift, 17, 20, shade(bottom, -0.18));
   }
 
   function torso(g, c) {
@@ -293,23 +299,30 @@
     }
   }
 
-  function arms(g, c) {
+  // 다리와 반대로 팔이 스윙하게 해서 걷는 느낌을 자연스럽게 만든다
+  function arms(g, c, walk) {
     const top = c.topColor;
     const sleeve = c.outfit === 'dress' || c.outfit === 'blouse' ? shade(top, 0.05) : top;
     const sdark = shade(sleeve, -0.2);
     const short = c.outfit === 'shirt' || c.outfit === 'blouse';
     const sleeveEnd = short ? 28 : 34;
+    // 뒤로 가는 팔만 몸 쪽으로 살짝 당겨 붙인다(바깥으로 밀면 몸통과 틈이 생겨 떨어져
+    // 보인다). 스텝의 끝(정점)에서만 움직이는 2프레임 방식.
+    const w = walk || 0;
+    const active = Math.abs(w) > 0.55;
+    const lx = 8 + (active && w < 0 ? 1 : 0);
+    const rx = 22 - (active && w > 0 ? 1 : 0);
     for (let y = 22; y <= sleeveEnd; y++) {
-      g.row(y, 8, 9, sleeve);
-      g.row(y, 22, 23, sdark);
+      g.row(y, lx, lx + 1, sleeve);
+      g.row(y, rx, rx + 1, sdark);
     }
     const handTop = sleeveEnd + 1;
     for (let y = handTop; y <= 36; y++) {
-      g.row(y, 8, 9, c.skin);
-      g.row(y, 22, 23, shade(c.skin, -0.12));
+      g.row(y, lx, lx + 1, c.skin);
+      g.row(y, rx, rx + 1, shade(c.skin, -0.12));
     }
-    g.rect(8, 37, 2, 2, c.skin);
-    g.rect(22, 37, 2, 2, shade(c.skin, -0.12));
+    g.rect(lx, 37, 2, 2, c.skin);
+    g.rect(rx, 37, 2, 2, shade(c.skin, -0.12));
   }
 
   function accessories(g, c) {
@@ -364,13 +377,13 @@
     return out;
   }
 
-  function buildGrid(attrs) {
+  function buildGrid(attrs, walk) {
     const c = normalize(attrs);
     const g = new Grid();
     drawHairBack(g, c);
-    legsAndShoes(g, c);
+    legsAndShoes(g, c, walk);
     torso(g, c);
-    arms(g, c);
+    arms(g, c, walk);
     drawHead(g, c);
     drawFace(g, c);
     drawHairFront(g, c);
@@ -400,8 +413,9 @@
   }
 
   // 그리드를 캔버스 컨텍스트에 배율만큼 확대해 찍는다. crop 지정 시 해당 영역만.
-  function drawTo(ctx, attrs, scale, originX, originY, crop) {
-    const g = attrs && attrs.__grid ? attrs.__grid : buildGrid(attrs);
+  // walk를 넘기면(걷는 중) 캐시를 쓰지 않고 그 프레임의 다리·팔 자세로 새로 그린다.
+  function drawTo(ctx, attrs, scale, originX, originY, crop, walk) {
+    const g = (walk === undefined && attrs && attrs.__grid) ? attrs.__grid : buildGrid(attrs, walk || 0);
     const y0 = crop ? crop.y : 0;
     const y1 = crop ? crop.y + crop.h : H;
     const x0 = crop ? crop.x : 0;
