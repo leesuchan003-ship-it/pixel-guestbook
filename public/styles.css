@@ -31,6 +31,37 @@ html, body {
   image-rendering: pixelated;
 }
 
+/* 첫 접속 시 하객 데이터를 받아오는 동안 보여주는 로딩 화면 */
+.loading-screen {
+  position: fixed; inset: 0; z-index: 40;
+  background: radial-gradient(circle at 50% 40%, #2c3f24, #12160f 78%);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 24px;
+  transition: opacity 0.4s ease;
+}
+.loading-screen.gone { opacity: 0; pointer-events: none; }
+.loading-tag {
+  background: #0e1014; color: var(--accent);
+  border: 2px solid var(--line); border-radius: 99px;
+  padding: 4px 14px; font-size: 11px; letter-spacing: 2px;
+  margin-bottom: 6px;
+}
+.loading-title { font-size: 20px; font-weight: 700; color: var(--ink); }
+.loading-sub { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.loading-bar {
+  width: min(220px, 70vw); height: 10px;
+  background: #0e1014; border: 2px solid var(--line); border-radius: 99px;
+  overflow: hidden;
+}
+.loading-bar-fill {
+  width: 40%; height: 100%; background: var(--accent); border-radius: 99px;
+  animation: loading-slide 1.1s ease-in-out infinite;
+}
+@keyframes loading-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
 /* 상단 배너 */
 .banner {
   position: fixed; top: calc(10px + env(safe-area-inset-top, 0px)); left: 50%;

@@ -50,6 +50,13 @@
 
   /* ---------------- 스프라이트 캐시 / 배치 ---------------- */
 
+  const SPAWN_MS = 1100;   // 새 하객이 버진로드를 걸어 들어오는 데 걸리는 시간
+  const FADE_MS = 250;     // 등장 시작 시 살짝 페이드인
+  const ENTRY_X = World.AISLE_X + World.AISLE_W / 2 - World.SPRITE_W / 2;
+  const ENTRY_Y = World.ALTAR_Y + 4;
+
+  function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
   function ensureGrid(entry) {
     if (entry.attrs.__grid) return;
     let g = state.spriteCache.get(entry.id);
@@ -77,10 +84,24 @@
   }
 
   // 지금 이 순간(now)의 실제 화면 좌표. 내 캐릭터는 조이스틱 위치, 나머지는 제자리 서성임.
+  // 막 등록된 사람은 버진로드 입구에서 자기 자리까지 걸어가는 중간 지점을 돌려준다.
   function currentPos(id, home, now) {
-    if (id === state.myId && state.myPos) return state.myPos;
-    const w = World.wanderOffset(id, now);
-    return { x: home.x + w.dx, y: home.y + w.dy };
+    let target;
+    if (id === state.myId && state.myPos) target = state.myPos;
+    else { const w = World.wanderOffset(id, now); target = { x: home.x + w.dx, y: home.y + w.dy }; }
+
+    const spawnT = state.spawnAt.get(id);
+    if (spawnT === undefined) return { x: target.x, y: target.y, alpha: 1 };
+
+    const elapsed = now - spawnT;
+    const t = Math.min(1, elapsed / SPAWN_MS);
+    if (t >= 1) state.spawnAt.delete(id);
+    const ease = easeOutCubic(t);
+    return {
+      x: ENTRY_X + (target.x - ENTRY_X) * ease,
+      y: ENTRY_Y + (target.y - ENTRY_Y) * ease,
+      alpha: Math.min(1, elapsed / FADE_MS),
+    };
   }
 
   function visibleSprites(now) {
@@ -89,7 +110,7 @@
       const home = state.homes.get(entry.id);
       if (!home) continue;
       const pos = currentPos(entry.id, home, now);
-      out.push({ entry, x: pos.x, y: pos.y });
+      out.push({ entry, x: pos.x, y: pos.y, alpha: pos.alpha });
     }
     out.sort((a, b) => (a.y - b.y));
     return out;
@@ -169,30 +190,16 @@
 
   function SPRITE_MARGIN(zoom) { return World.SPRITE_H * zoom + 20; }
 
-  const SPAWN_MS = 500; // 새 하객이 등장할 때 발밑에서부터 커지는 팝인 시간
-
   function drawSprites(sprites, zoom, offsetX, cssH) {
     const margin = SPRITE_MARGIN(zoom);
-    const now = Date.now();
     for (const p of sprites) {
       const { sx, sy } = worldToScreen(p.x, p.y, zoom, offsetX);
       if (sy < -margin || sy > cssH + margin) continue;
       ensureGrid(p.entry);
-
-      const spawnT = state.spawnAt.get(p.entry.id);
-      if (spawnT === undefined) {
-        S.drawTo(ctx, p.entry.attrs, zoom, Math.round(sx), Math.round(sy));
-        continue;
-      }
-      const t = Math.min(1, (now - spawnT) / SPAWN_MS);
-      if (t >= 1) { state.spawnAt.delete(p.entry.id); }
-      // 발밑(바닥) 기준으로 작았다가 커지면서 서서히 나타난다
-      const fullW = World.SPRITE_W * zoom, fullH = World.SPRITE_H * zoom;
-      const eff = 0.55 + 0.45 * t;
-      const w = fullW * eff, h = fullH * eff;
-      ctx.globalAlpha = 0.2 + 0.8 * t;
-      S.drawTo(ctx, p.entry.attrs, zoom * eff, Math.round(sx + (fullW - w) / 2), Math.round(sy + (fullH - h)));
-      ctx.globalAlpha = 1;
+      const alpha = p.alpha === undefined ? 1 : p.alpha;
+      if (alpha < 1) ctx.globalAlpha = alpha;
+      S.drawTo(ctx, p.entry.attrs, zoom, Math.round(sx), Math.round(sy));
+      if (alpha < 1) ctx.globalAlpha = 1;
     }
   }
 
@@ -1130,7 +1137,17 @@
   resize();
   loop();
 
+  function hideLoadingScreen() {
+    const el = $('#loadingScreen');
+    if (!el || el.hidden) return;
+    el.classList.add('gone');
+    setTimeout(() => { el.hidden = true; }, 450);
+  }
+  // 네트워크가 느려도 화면이 계속 로딩 상태로 멈춰있지 않도록 안전장치를 둔다
+  setTimeout(hideLoadingScreen, 4000);
+
   refresh().then(() => {
+    hideLoadingScreen();
     if (new URLSearchParams(location.search).has('admin')) openAdmin();
     if (state.myId) focusEntry(state.myId);
   });
