@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: pixel-guestbook
+    runtime: node
+    plan: free
+    buildCommand: ""
+    startCommand: node server.js
+    envVars:
+      - key: ADMIN_KEY
+        sync: false
