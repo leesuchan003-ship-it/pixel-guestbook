@@ -536,6 +536,7 @@
       if (which === 'create') startCreate();
       else if (which === 'list') openList();
       else if (which === 'gallery') openGallery();
+      else if (which === 'capture') saveKeepsake();
     });
   });
 
@@ -824,6 +825,89 @@
     openModal('listModal');
   }
 
+  /* ---------------- 기념 캡처 ---------------- */
+
+  // 지금 화면(스크롤 위치)이 아니라 웨딩 공간 전체를 하나의 "단체사진"으로 만든다.
+  // 서성이는 움직임 없이 제자리(홈 포지션)에 세워서 깔끔하게 찍는다.
+  function saveKeepsake() {
+    const bg = {};
+    World.renderBackground(bg, state.entries.length, 0);
+    const w = World.WORLD_W;
+    const h = bg.height;
+    const scale = Math.max(2, Math.min(4, Math.round(1800 / h)));
+    const titleH = 34 * scale;
+
+    const cv = document.createElement('canvas');
+    cv.width = w * scale;
+    cv.height = h * scale + titleH;
+    const c = cv.getContext('2d');
+    c.imageSmoothingEnabled = false;
+
+    // 제목 바
+    c.fillStyle = '#14161a';
+    c.fillRect(0, 0, cv.width, titleH);
+    c.fillStyle = '#e8b44a';
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.font = `${Math.round(13 * scale)}px "Galmuri11", "Apple SD Gothic Neo", system-ui, sans-serif`;
+    c.fillText(state.config.title || '단 한 번뿐인 결혼식', cv.width / 2, titleH / 2 - 2 * scale);
+    c.fillStyle = '#c9cdd6';
+    c.font = `${Math.round(7 * scale)}px "Galmuri11", "Apple SD Gothic Neo", system-ui, sans-serif`;
+    c.fillText(`하객 ${state.entries.length}명이 함께했습니다`, cv.width / 2, titleH / 2 + 11 * scale);
+
+    // 배경
+    c.drawImage(bg.canvas, 0, 0, w, h, 0, titleH, w * scale, h * scale);
+
+    // 신랑신부 + 하객: 서성임 없이 제자리에 고정해서 찍는다
+    for (const cpl of World.couplePositions(state.config.couple, 0)) {
+      S.drawTo(c, cpl.attrs, scale, Math.round(cpl.x * scale), titleH + Math.round(cpl.y * scale));
+    }
+    const homes = World.layout(state.entries);
+    homes.sort((a, b) => a.y - b.y);
+    for (const p of homes) {
+      ensureGrid(p.entry);
+      S.drawTo(c, p.entry.attrs, scale, Math.round(p.x * scale), titleH + Math.round(p.y * scale));
+    }
+
+    // 이름표: 화면에서 쓰던 것과 같은 겹침 방지 로직(겹치면 아래로 밀기)을 그대로 적용
+    const nameSize = Math.max(9, Math.round(7.5 * scale));
+    c.textAlign = 'center';
+    c.textBaseline = 'alphabetic';
+    c.font = `${nameSize}px "Galmuri11", "Apple SD Gothic Neo", system-ui, sans-serif`;
+    c.lineWidth = Math.max(3, nameSize * 0.36);
+    c.lineJoin = 'round';
+    const drawn = [];
+    const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+    for (const p of homes) {
+      const baseX = Math.round(p.x * scale) + (World.SPRITE_W * scale) / 2;
+      let baseY = titleH + Math.round(p.y * scale) + World.SPRITE_H * scale + nameSize;
+      const name = p.entry.name || '';
+      const w = c.measureText(name).width + 4;
+      for (let tries = 0; tries < 4; tries++) {
+        const box = { x: baseX - w / 2, y: baseY - nameSize, w, h: nameSize + 2 };
+        if (!drawn.some((d) => overlaps(box, d))) { drawn.push(box); break; }
+        baseY += nameSize + 2;
+      }
+      c.strokeStyle = 'rgba(12,16,10,0.85)';
+      c.strokeText(name, baseX, baseY);
+      c.fillStyle = '#ffffff';
+      c.fillText(name, baseX, baseY);
+    }
+
+    toast('기념 사진을 만들고 있어요…');
+    cv.toBlob((blob) => {
+      if (!blob) { toast('이미지를 만들지 못했어요'); return; }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `wedding-guestbook-${new Date().toISOString().slice(0, 10)}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    }, 'image/png');
+  }
+
   /* ---------------- 갤러리 ---------------- */
 
   function openGallery() {
@@ -907,6 +991,37 @@
       const stamp = new Date().toISOString().slice(0, 10);
       a.href = url;
       a.download = `guestbook-backup-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } catch (e) { toast(e.message); }
+  });
+
+  function csvCell(v) {
+    const s = String(v == null ? '' : v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  $('#exportCsv').addEventListener('click', async () => {
+    try {
+      const data = await api('/api/state');
+      const rows = [['이름', '메시지', '헤어스타일', '의상', '등록시각']];
+      for (const e of data.entries) {
+        rows.push([
+          e.name,
+          e.message || '',
+          (e.attrs && e.attrs.hairStyle) || '',
+          (e.attrs && e.attrs.outfit) || '',
+          new Date(e.createdAt).toLocaleString('ko-KR'),
+        ]);
+      }
+      const csv = '﻿' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `guestbook-${new Date().toISOString().slice(0, 10)}.csv`;
       document.body.appendChild(a);
       a.click();
       a.remove();
