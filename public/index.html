@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#4d7a3d">
+<title>픽셀 방명록</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%236f9c54'/><rect x='5' y='3' width='6' height='4' fill='%232b1d17'/><rect x='5' y='7' width='6' height='3' fill='%23f0c9a2'/><rect x='4' y='10' width='8' height='5' fill='%232b3038'/></svg>">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/quiple/galmuri/dist/galmuri.css">
+</head>
+<body>
+<canvas id="world"></canvas>
+
+<div id="banner" class="banner"><span id="bannerText">단 한 번뿐인 결혼식</span></div>
+<div id="counter" class="counter">하객 <b>0</b>명</div>
+
+<div id="tapHint" class="tap-hint">화면을 끌어서 둘러보세요 · 캐릭터를 누르면 메시지가 보여요</div>
+
+<button id="fab" class="fab" aria-label="메뉴 열기">
+  <span class="fab-plus"></span>
+</button>
+
+<div id="sheet" class="sheet" hidden>
+  <div class="sheet-inner">
+    <button class="sheet-btn" data-open="create"><span class="ico">📸</span>캐릭터 만들기</button>
+    <button class="sheet-btn" data-open="list"><span class="ico">📖</span>방명록 목록</button>
+    <button class="sheet-btn" data-open="gallery"><span class="ico">🖼️</span>웨딩 갤러리</button>
+    <button id="sheetClose" class="sheet-close" aria-label="닫기">✕</button>
+  </div>
+</div>
+
+<!-- 캐릭터 만들기 -->
+<section id="createModal" class="modal" hidden>
+  <div class="modal-card">
+    <button class="modal-x" data-close aria-label="닫기">✕</button>
+
+    <div class="step" data-step="upload">
+      <h2>캐릭터 만들기</h2>
+      <p class="sub">사진을 올리면 픽셀 캐릭터로 바꿔드려요</p>
+      <label class="drop">
+        <input type="file" id="photoInput" accept="image/*" hidden>
+        <span class="drop-ico">📷</span>
+        <span class="drop-main">사진 올리기</span>
+        <span class="drop-sub">얼굴이 잘 나온 사진이면 더 잘 만들어져요</span>
+      </label>
+      <p class="privacy">사진은 브라우저 안에서만 분석되고 서버로 전송·저장되지 않습니다.</p>
+      <button class="ghost" id="skipPhoto">사진 없이 직접 꾸미기</button>
+    </div>
+
+    <div class="step" data-step="loading" hidden>
+      <h2>캐릭터 만드는 중</h2>
+      <div class="loader"><span></span><span></span><span></span></div>
+      <p class="sub" id="loadingMsg">사진을 분석하고 있어요…</p>
+    </div>
+
+    <div class="step" data-step="pick" hidden>
+      <h2>✨ 캐릭터 생성 결과</h2>
+      <p class="sub">마음에 드는 캐릭터를 선택해 주세요</p>
+      <div class="candidates" id="candidates"></div>
+      <div class="row-btns">
+        <button class="ghost" id="regenerate">재생성</button>
+        <button class="ghost" id="toCustom">직접 꾸미기</button>
+      </div>
+      <button class="primary" id="pickNext" disabled>이 캐릭터로 할래요</button>
+    </div>
+
+    <div class="step" data-step="custom" hidden>
+      <h2>직접 꾸미기</h2>
+      <div class="custom-wrap">
+        <div class="preview-box"><canvas id="customPreview" width="120" height="168"></canvas></div>
+        <div class="controls" id="customControls"></div>
+      </div>
+      <button class="primary" id="customNext">다 꾸몄어요</button>
+    </div>
+
+    <div class="step" data-step="info" hidden>
+      <h2>이름과 축하 메시지</h2>
+      <div class="preview-box small"><canvas id="infoPreview" width="110" height="164"></canvas></div>
+      <input id="nameInput" class="field" maxlength="12" placeholder="이름 (예: 최명원)" autocomplete="off">
+      <textarea id="msgInput" class="field" maxlength="60" rows="2" placeholder="캐릭터 대사 (예: 결혼 축하해!!)"></textarea>
+      <p class="sub" id="infoError" hidden></p>
+      <button class="primary" id="submitEntry">방명록에 남기기</button>
+    </div>
+
+    <div class="step" data-step="done" hidden>
+      <h2>등록 완료!</h2>
+      <p class="sub">식장에 캐릭터가 입장했어요</p>
+      <div class="preview-box small"><canvas id="donePreview" width="110" height="164"></canvas></div>
+      <button class="primary" data-close>내 캐릭터 보러가기</button>
+    </div>
+  </div>
+</section>
+
+<!-- 방명록 목록 -->
+<section id="listModal" class="modal" hidden>
+  <div class="modal-card tall">
+    <button class="modal-x" data-close aria-label="닫기">✕</button>
+    <h2>방명록 목록</h2>
+    <p class="sub" id="listCount"></p>
+    <div class="entries" id="entries"></div>
+  </div>
+</section>
+
+<!-- 웨딩 갤러리 -->
+<section id="galleryModal" class="modal" hidden>
+  <div class="modal-card tall">
+    <button class="modal-x" data-close aria-label="닫기">✕</button>
+    <h2>웨딩 갤러리</h2>
+    <div class="gallery" id="gallery"></div>
+    <p class="sub" id="galleryEmpty" hidden>아직 등록된 사진이 없어요</p>
+  </div>
+</section>
+
+<!-- 관리자 -->
+<section id="adminModal" class="modal" hidden>
+  <div class="modal-card tall">
+    <button class="modal-x" data-close aria-label="닫기">✕</button>
+    <h2>관리자</h2>
+    <div id="adminLogin">
+      <input id="adminKey" class="field" type="password" placeholder="관리자 비밀번호" autocomplete="off">
+      <button class="primary" id="adminLoginBtn">로그인</button>
+      <p class="sub" id="adminError" hidden></p>
+    </div>
+    <div id="adminPanel" hidden>
+      <label class="lbl">식장 배너 문구</label>
+      <input id="cfgTitle" class="field" maxlength="24">
+      <label class="lbl">갤러리 사진 추가</label>
+      <input type="file" id="galleryInput" accept="image/*" multiple class="field">
+      <button class="primary" id="saveConfig">저장</button>
+      <label class="lbl">방명록 관리</label>
+      <div class="entries" id="adminEntries"></div>
+      <button class="ghost" id="adminLogout">로그아웃</button>
+    </div>
+  </div>
+</section>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="sprite.js"></script>
+<script src="photo.js"></script>
+<script src="world.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

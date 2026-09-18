@@ -1,0 +1,13 @@
+{
+  "name": "pixel-guestbook",
+  "version": "1.0.0",
+  "private": true,
+  "description": "픽셀 캐릭터로 남기는 게임형 결혼식 방명록",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
