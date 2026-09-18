@@ -18,15 +18,21 @@
   const CLOTH_COLORS = ['#1b1d22', '#2b3038', '#39404d', '#4a5568', '#7a8496', '#c8ccd4', '#f0eee8',
     '#8a3b46', '#a8546b', '#3b5a4a', '#2f4a6b', '#7a5a33', '#c9a063', '#5b4a6b'];
 
+  const MOVE_SPEED = 46; // 조이스틱으로 걸을 때 초당 월드 픽셀
+
   const state = {
     entries: [],
     config: { title: '단 한 번뿐인 결혼식', gallery: [] },
-    cache: {},
+    cache: {},                 // 배경 오프스크린 캔버스 + height
+    homes: new Map(),          // id -> {x,y} 제자리(고정) 좌표
+    spriteCache: new Map(),    // id -> 빌드된 픽셀 그리드 (매 프레임 재계산 방지)
     camera: { y: 0 },
     zoom: 1,
     offsetX: 0,
-    bubbles: new Map(),   // entryId -> 만료 timestamp (0 = 항상 표시)
+    bubbles: new Map(),        // entryId -> 만료 timestamp (탭으로 강제 표시)
     myId: localStorage.getItem('pg_my_id') || null,
+    myPos: null,               // 내 캐릭터의 실제 좌표(조이스틱으로 이동)
+    joyVec: { x: 0, y: 0 },
     adminKey: sessionStorage.getItem('pg_admin') || null,
     draft: null,
     candidates: [],
@@ -37,6 +43,53 @@
   const $ = (sel) => document.querySelector(sel);
   const canvas = $('#world');
   const ctx = canvas.getContext('2d');
+
+  /* ---------------- 스프라이트 캐시 / 배치 ---------------- */
+
+  function ensureGrid(entry) {
+    if (entry.attrs.__grid) return;
+    let g = state.spriteCache.get(entry.id);
+    if (!g) {
+      g = S.buildGrid(entry.attrs);
+      state.spriteCache.set(entry.id, g);
+    }
+    entry.attrs.__grid = g;
+  }
+
+  function rebuildHomes() {
+    state.homes = new Map();
+    World.layout(state.entries).forEach((p) => state.homes.set(p.id, { x: p.x, y: p.y }));
+    if (state.myId && state.homes.has(state.myId) && !state.myPos) {
+      state.myPos = Object.assign({}, state.homes.get(state.myId));
+    }
+  }
+
+  function clampMyPos(pos) {
+    const maxY = (state.cache.height || 400) - 30;
+    return {
+      x: Math.max(2, Math.min(World.WORLD_W - World.SPRITE_W - 2, pos.x)),
+      y: Math.max(World.ALTAR_Y - 10, Math.min(maxY, pos.y)),
+    };
+  }
+
+  // 지금 이 순간(now)의 실제 화면 좌표. 내 캐릭터는 조이스틱 위치, 나머지는 제자리 서성임.
+  function currentPos(id, home, now) {
+    if (id === state.myId && state.myPos) return state.myPos;
+    const w = World.wanderOffset(id, now);
+    return { x: home.x + w.dx, y: home.y + w.dy };
+  }
+
+  function visibleSprites(now) {
+    const out = [];
+    for (const entry of state.entries) {
+      const home = state.homes.get(entry.id);
+      if (!home) continue;
+      const pos = currentPos(entry.id, home, now);
+      out.push({ entry, x: pos.x, y: pos.y });
+    }
+    out.sort((a, b) => (a.y - b.y));
+    return out;
+  }
 
   /* ---------------- 월드 렌더링 ---------------- */
 
@@ -70,11 +123,15 @@
     return Math.max(0, (state.cache.height || 0) - cssH / zoom);
   }
 
+  function worldToScreen(x, y, zoom, offsetX) {
+    return { sx: offsetX + x * zoom, sy: (y - state.camera.y) * zoom };
+  }
+
   function draw() {
     const { cssW, cssH, zoom, offsetX } = viewMetrics();
     const viewH = cssH / zoom;
     if (sceneDirty) {
-      World.renderScene(state.cache, state.entries, state.config.couple, viewH);
+      World.renderBackground(state.cache, state.entries.length, viewH);
       sceneDirty = false;
     }
     state.zoom = zoom; state.offsetX = offsetX;
@@ -88,18 +145,38 @@
       ctx.drawImage(scene, 0, state.camera.y, World.WORLD_W, viewH,
         offsetX, 0, World.WORLD_W * zoom, viewH * zoom);
     }
-    drawLabels(zoom, offsetX, cssH);
-  }
 
-  function worldToScreen(x, y, zoom, offsetX) {
-    return { sx: offsetX + x * zoom, sy: (y - state.camera.y) * zoom };
-  }
-
-  function drawLabels(zoom, offsetX, cssH) {
-    const placed = state.cache.placed || [];
-    const nameSize = Math.max(10, Math.round(8.5 * zoom));
     const now = Date.now();
+    drawCouple(now, zoom, offsetX, cssH);
+    const sprites = visibleSprites(now);
+    state.lastSprites = sprites;
+    drawSprites(sprites, zoom, offsetX, cssH);
+    drawLabels(sprites, zoom, offsetX, cssH);
+    drawBubbles(sprites, now, zoom, offsetX, cssH);
+  }
 
+  function drawCouple(now, zoom, offsetX, cssH) {
+    for (const c of World.couplePositions(state.config.couple, now)) {
+      const { sx, sy } = worldToScreen(c.x, c.y, zoom, offsetX);
+      if (sy < -SPRITE_MARGIN(zoom) || sy > cssH + SPRITE_MARGIN(zoom)) continue;
+      S.drawTo(ctx, c.attrs, zoom, Math.round(sx), Math.round(sy));
+    }
+  }
+
+  function SPRITE_MARGIN(zoom) { return World.SPRITE_H * zoom + 20; }
+
+  function drawSprites(sprites, zoom, offsetX, cssH) {
+    const margin = SPRITE_MARGIN(zoom);
+    for (const p of sprites) {
+      const { sx, sy } = worldToScreen(p.x, p.y, zoom, offsetX);
+      if (sy < -margin || sy > cssH + margin) continue;
+      ensureGrid(p.entry);
+      S.drawTo(ctx, p.entry.attrs, zoom, Math.round(sx), Math.round(sy));
+    }
+  }
+
+  function drawLabels(sprites, zoom, offsetX, cssH) {
+    const nameSize = Math.max(10, Math.round(8.5 * zoom));
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
     ctx.font = `${nameSize}px "Galmuri11", "Apple SD Gothic Neo", system-ui, sans-serif`;
@@ -108,12 +185,11 @@
 
     const drawn = [];
     const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-    for (const p of placed) {
+    for (const p of sprites) {
       const base = worldToScreen(p.x + World.SPRITE_W / 2, p.y + World.SPRITE_H + 8, zoom, offsetX);
       if (base.sy < -40 || base.sy > cssH + 60) continue;
       const name = p.entry.name || '';
       const w = ctx.measureText(name).width + 4;
-      // 이름표가 겹치면 조금씩 아래로 밀어 읽을 수 있게 한다
       let sy = base.sy;
       for (let tries = 0; tries < 3; tries++) {
         const box = { x: base.sx - w / 2, y: sy - nameSize, w, h: nameSize + 2 };
@@ -125,15 +201,41 @@
       ctx.fillStyle = p.entry.id === state.myId ? '#ffe9a8' : '#ffffff';
       ctx.fillText(name, base.sx, sy);
     }
+  }
 
-    for (const p of placed) {
-      const until = state.bubbles.get(p.entry.id);
-      if (until === undefined) continue;
-      if (until !== 0 && until < now) { state.bubbles.delete(p.entry.id); continue; }
+  const MAX_AUTO_BUBBLES = 2; // 한 화면에 자동 말풍선이 한꺼번에 여러 개 뜨지 않도록 제한
+
+  function drawBubbles(sprites, now, zoom, offsetX, cssH) {
+    for (const [id, until] of state.bubbles) {
+      if (until < now) state.bubbles.delete(id);
+    }
+    const shown = new Set();
+    const toDraw = [];
+    const autoCandidates = [];
+    for (const p of sprites) {
       const msg = (p.entry.message || '').trim();
       if (!msg) continue;
-      drawBubble(p, msg, zoom, offsetX, cssH);
+      const forced = (state.bubbles.get(p.entry.id) || 0) > now;
+      if (forced) {
+        toDraw.push({ p, msg });
+        shown.add(p.entry.id);
+        continue;
+      }
+      const sy = worldToScreen(p.x, p.y, zoom, offsetX).sy;
+      if (sy > cssH + 60 || sy < -60) continue;
+      const win = World.bubbleWindow(p.entry.id, now);
+      if (win.active) autoCandidates.push({ p, msg, phase: win.phase });
     }
+    // phase가 작을수록 "방금 시작한" 말풍선이라 이걸 우선 보여준다
+    autoCandidates.sort((a, b) => a.phase - b.phase);
+    for (const c of autoCandidates) {
+      if (toDraw.length >= MAX_AUTO_BUBBLES + shown.size) break;
+      if (shown.has(c.p.entry.id)) continue;
+      toDraw.push(c);
+    }
+
+    const placed = [];
+    for (const c of toDraw) drawBubble(c.p, c.msg, zoom, offsetX, cssH, placed);
   }
 
   function wrapText(text, maxWidth) {
@@ -149,7 +251,7 @@
     return lines.slice(0, 4);
   }
 
-  function drawBubble(p, msg, zoom, offsetX, cssH) {
+  function drawBubble(p, msg, zoom, offsetX, cssH, placed) {
     const size = Math.max(11, Math.round(9 * zoom));
     ctx.font = `${size}px "Galmuri11", "Apple SD Gothic Neo", system-ui, sans-serif`;
     const maxW = Math.min(150 * zoom, window.innerWidth - 40);
@@ -162,7 +264,18 @@
     if (anchor.sy < -80 || anchor.sy > cssH + 80) return;
     let bx = anchor.sx - w / 2;
     bx = Math.max(8, Math.min(bx, window.innerWidth - w - 8));
-    const by = anchor.sy - h - 6;
+    let by = anchor.sy - h - 6;
+
+    // 다른 말풍선과 겹치면 위로 밀어 올린다 (여러 개가 한 화면에 뜰 때 대비)
+    if (placed) {
+      const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+      let box = { x: bx, y: by, w, h };
+      for (let tries = 0; tries < 6 && placed.some((d) => overlaps(box, d)); tries++) {
+        by -= h + 8;
+        box = { x: bx, y: by, w, h };
+      }
+      placed.push(box);
+    }
 
     ctx.fillStyle = 'rgba(10,12,14,0.92)';
     ctx.strokeStyle = '#f2f0ea';
@@ -170,7 +283,6 @@
     roundRect(bx, by, w, h, 8);
     ctx.fill();
     ctx.stroke();
-    // 꼬리
     ctx.beginPath();
     ctx.moveTo(anchor.sx - 5, by + h - 1);
     ctx.lineTo(anchor.sx + 5, by + h - 1);
@@ -200,7 +312,14 @@
     requestAnimationFrame(loop);
   }
 
-  /* ---------------- 카메라 조작 ---------------- */
+  // 하객이 제자리에서 서성이는 걸 계속 보여주려면 매 프레임 다시 그려야 한다.
+  // 배터리를 아끼려고 화면이 안 보일 땐 멈추고, 그 외엔 draw()를 계속 요청한다.
+  function ambientTick() {
+    if (!document.hidden) markDirty(false);
+  }
+  setInterval(ambientTick, 90);
+
+  /* ---------------- 카메라 조작 (화면을 끌면 카메라가 움직인다) ---------------- */
 
   let drag = null;
   let velocity = 0;
@@ -251,13 +370,12 @@
   function handleTap(clientX, clientY) {
     const wx = (clientX - state.offsetX) / state.zoom;
     const wy = clientY / state.zoom + state.camera.y;
-    const placed = state.cache.placed || [];
-    for (let i = placed.length - 1; i >= 0; i--) {
-      const p = placed[i];
+    const sprites = state.lastSprites || [];
+    for (let i = sprites.length - 1; i >= 0; i--) {
+      const p = sprites[i];
       if (wx >= p.x && wx <= p.x + World.SPRITE_W && wy >= p.y && wy <= p.y + World.SPRITE_H) {
         if ((p.entry.message || '').trim()) {
           state.bubbles.set(p.entry.id, Date.now() + 6000);
-          setTimeout(markDirty, 6100);
         }
         markDirty();
         hideHint();
@@ -267,13 +385,11 @@
   }
 
   function focusEntry(id) {
-    const placed = state.cache.placed || [];
-    const p = placed.find((q) => q.entry.id === id);
-    if (!p) return;
-    const target = p.y - (window.innerHeight / state.zoom) * 0.45;
+    const home = state.homes.get(id);
+    if (!home) return;
+    const target = home.y - (window.innerHeight / state.zoom) * 0.45;
     state.camera.y = Math.max(0, target);
     state.bubbles.set(id, Date.now() + 8000);
-    setTimeout(markDirty, 8100);
     markDirty();
   }
 
@@ -282,6 +398,67 @@
     if (h && !h.classList.contains('gone')) h.classList.add('gone');
   }
   setTimeout(hideHint, 7000);
+
+  /* ---------------- 내 캐릭터 조이스틱 ---------------- */
+
+  const joy = $('#joystick');
+  const joyThumb = $('#joystickThumb');
+  const JOY_R = 32;
+  let joyPointerId = null;
+  let lastTick = performance.now();
+
+  function updateJoyVisibility() {
+    joy.hidden = !state.myId;
+    $('#findMe').hidden = !state.myId;
+  }
+
+  function setJoyVec(clientX, clientY) {
+    const rect = joy.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    let dx = clientX - cx, dy = clientY - cy;
+    const dist = Math.hypot(dx, dy);
+    if (dist > JOY_R) { dx = (dx / dist) * JOY_R; dy = (dy / dist) * JOY_R; }
+    joyThumb.style.transform = `translate(${dx}px, ${dy}px)`;
+    state.joyVec = { x: dx / JOY_R, y: dy / JOY_R };
+  }
+
+  function resetJoy() {
+    joyPointerId = null;
+    state.joyVec = { x: 0, y: 0 };
+    joyThumb.style.transform = 'translate(0,0)';
+  }
+
+  joy.addEventListener('pointerdown', (e) => {
+    joyPointerId = e.pointerId;
+    joy.setPointerCapture(e.pointerId);
+    setJoyVec(e.clientX, e.clientY);
+    e.preventDefault();
+  });
+  joy.addEventListener('pointermove', (e) => {
+    if (joyPointerId !== e.pointerId) return;
+    setJoyVec(e.clientX, e.clientY);
+  });
+  joy.addEventListener('pointerup', (e) => { if (joyPointerId === e.pointerId) resetJoy(); });
+  joy.addEventListener('pointercancel', () => resetJoy());
+
+  $('#findMe').addEventListener('click', () => {
+    if (state.myId) focusEntry(state.myId);
+  });
+
+  // 조이스틱을 미는 동안 내 캐릭터 좌표를 실제로 전진시킨다 (카메라 드래그와는 별개 동작).
+  setInterval(() => {
+    const now = performance.now();
+    const dt = Math.min(0.25, (now - lastTick) / 1000);
+    lastTick = now;
+    if (state.myId && (state.joyVec.x || state.joyVec.y) && state.myPos) {
+      state.myPos = clampMyPos({
+        x: state.myPos.x + state.joyVec.x * MOVE_SPEED * dt,
+        y: state.myPos.y + state.joyVec.y * MOVE_SPEED * dt,
+      });
+      markDirty();
+    }
+  }, 60);
 
   /* ---------------- 데이터 ---------------- */
 
@@ -308,13 +485,8 @@
     $('#bannerText').textContent = state.config.title || '단 한 번뿐인 결혼식';
     document.title = state.config.title || '픽셀 방명록';
     $('#counter').innerHTML = '하객 <b>' + state.entries.length + '</b>명';
-    // 최근 하객 둘은 말풍선을 계속 띄워두고, 눌러서 띄운 말풍선은 남겨둔다
-    const now = Date.now();
-    for (const [id, until] of state.bubbles) {
-      if (until === 0 || until < now) state.bubbles.delete(id);
-    }
-    state.entries.slice(-2).forEach((e) => state.bubbles.set(e.id, 0));
-    if (state.myId) state.bubbles.set(state.myId, 0);
+    rebuildHomes();
+    updateJoyVisibility();
     markDirty(changed);
     return changed;
   }
@@ -575,8 +747,10 @@
     try {
       const created = await api('/api/entries', { method: 'POST', body: { name, message, attrs: state.draft } });
       state.myId = created.id;
+      state.myPos = null; // rebuildHomes에서 새 자리로 다시 잡는다
       localStorage.setItem('pg_my_id', created.id);
       await refresh();
+      if (message) state.bubbles.set(created.id, Date.now() + 5000);
       drawPreview($('#donePreview'), state.draft, 3);
       showStep('done');
       focusEntry(created.id);
