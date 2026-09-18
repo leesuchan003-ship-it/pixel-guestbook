@@ -26,6 +26,7 @@
     cache: {},                 // 배경 오프스크린 캔버스 + height
     homes: new Map(),          // id -> {x,y} 제자리(고정) 좌표
     spriteCache: new Map(),    // id -> 빌드된 픽셀 그리드 (매 프레임 재계산 방지)
+    portraitImages: new Map(), // id -> {img, loaded, failed} (AI 초상화 이미지 캐시)
     camera: { y: 0 },
     zoom: 1,
     offsetX: 0,
@@ -43,6 +44,10 @@
     candidates: [],
     picked: -1,
     analysis: null,
+    aiAvailable: false,
+    pendingPhotoFile: null,
+    aiPortraitUrl: null,
+    aiSquareDataUrl: null,
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -66,6 +71,22 @@
       state.spriteCache.set(entry.id, g);
     }
     entry.attrs.__grid = g;
+  }
+
+  // AI 초상화 이미지를 지연 로드해 캐싱한다. 아직 안 뜬 동안엔 null을 돌려줘서
+  // 호출부가 절차적 픽셀 캐릭터로 대신 그리게 한다(빈 자리가 보이지 않도록).
+  function getPortraitImage(entry) {
+    const url = entry.portraitUrl;
+    if (!url) return null;
+    let rec = state.portraitImages.get(entry.id);
+    if (!rec) {
+      rec = { img: new Image(), loaded: false, failed: false };
+      rec.img.onload = () => { rec.loaded = true; };
+      rec.img.onerror = () => { rec.failed = true; };
+      rec.img.src = url;
+      state.portraitImages.set(entry.id, rec);
+    }
+    return rec.loaded ? rec.img : null;
   }
 
   function rebuildHomes() {
@@ -251,10 +272,22 @@
       if (sy < -margin || sy > cssH + margin) continue;
       const alpha = p.alpha === undefined ? 1 : p.alpha;
       if (alpha < 1) ctx.globalAlpha = alpha;
-      if (p.moving) {
+      const portrait = p.entry.portraitUrl ? getPortraitImage(p.entry) : null;
+      if (portrait) {
+        // AI 초상화는 정사각형이라 절차적 캐릭터보다 조금 더 존재감 있게, 발밑 기준으로 그린다
+        const boxH = World.SPRITE_H * zoom * 1.15;
+        const boxW = boxH;
+        const dx = sx + (World.SPRITE_W * zoom - boxW) / 2;
+        const dy = sy + World.SPRITE_H * zoom - boxH;
+        const prevSmooth = ctx.imageSmoothingEnabled;
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(portrait, dx, dy, boxW, boxH);
+        ctx.imageSmoothingEnabled = prevSmooth;
+      } else if (p.moving) {
         // 걷는 중일 땐 캐시를 안 쓰고 이번 프레임의 다리·팔 자세로 새로 그린다
         S.drawTo(ctx, p.entry.attrs, zoom, Math.round(sx), Math.round(sy) + bob, undefined, phase);
       } else {
+        // portraitUrl은 있지만 아직 이미지가 안 떴을 때도 여기로 와서 절차적 캐릭터로 임시 표시된다
         ensureGrid(p.entry);
         S.drawTo(ctx, p.entry.attrs, zoom, Math.round(sx), Math.round(sy));
       }
@@ -676,6 +709,9 @@
     state.analysis = null;
     state.candidates = [];
     state.picked = -1;
+    state.pendingPhotoFile = null;
+    state.aiPortraitUrl = null;
+    state.aiSquareDataUrl = null;
     $('#photoInput').value = '';
     $('#nameInput').value = '';
     $('#msgInput').value = '';
@@ -683,10 +719,20 @@
     openModal('createModal');
   }
 
-  $('#photoInput').addEventListener('change', async (e) => {
+  $('#photoInput').addEventListener('change', (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
+    state.pendingPhotoFile = file;
+    if (state.aiAvailable) showStep('mode');
+    else runFreeAnalysis(file);
+  });
+
+  function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+  async function runFreeAnalysis(file) {
+    state.aiPortraitUrl = null;
     showStep('loading');
+    $('#loadingTitle').textContent = '캐릭터 만드는 중';
     $('#loadingMsg').textContent = '사진을 분석하고 있어요…';
     try {
       // 분석이 순식간에 끝나 화면이 튀지 않도록 최소 시간을 준다
@@ -699,15 +745,67 @@
       toast('사진을 읽지 못했어요. 다른 사진을 시도해 주세요');
       showStep('upload');
     }
-  });
-
-  function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
+  }
 
   $('#skipPhoto').addEventListener('click', () => {
+    state.pendingPhotoFile = null;
+    state.aiPortraitUrl = null;
     state.analysis = { detected: false, skin: S.SKINS[1], hairColor: S.HAIR_COLORS[1], topColor: '#2b3038', longHair: false };
     buildCandidates();
     showStep('pick');
   });
+
+  /* ---- AI로 캐릭터 만들기 ---- */
+
+  $('#chooseFree').addEventListener('click', () => {
+    if (state.pendingPhotoFile) runFreeAnalysis(state.pendingPhotoFile);
+  });
+  $('#aiToFree').addEventListener('click', () => {
+    if (state.pendingPhotoFile) runFreeAnalysis(state.pendingPhotoFile);
+  });
+
+  // 사진을 정사각형 PNG로 잘라 리사이즈한다(이미지 생성 API 입력 규격에 맞춤)
+  async function squarePngDataUrl(file, size) {
+    const bmp = await P.loadBitmap(file);
+    const side = Math.min(bmp.width, bmp.height);
+    const sx = (bmp.width - side) / 2, sy = (bmp.height - side) / 2;
+    const cv = document.createElement('canvas');
+    cv.width = size; cv.height = size;
+    cv.getContext('2d').drawImage(bmp, sx, sy, side, side, 0, 0, size, size);
+    if (bmp.close) bmp.close();
+    return cv.toDataURL('image/png');
+  }
+
+  $('#chooseAi').addEventListener('click', runAiFlow);
+  $('#aiRegenerate').addEventListener('click', runAiFlow);
+
+  async function runAiFlow() {
+    const file = state.pendingPhotoFile;
+    if (!file) return;
+    showStep('loading');
+    $('#loadingTitle').textContent = 'AI가 그리는 중';
+    $('#loadingMsg').textContent = 'AI가 사진을 보고 픽셀 캐릭터를 그리고 있어요… (10~20초 정도 걸려요)';
+    try {
+      if (!state.aiSquareDataUrl) state.aiSquareDataUrl = await squarePngDataUrl(file, 768);
+      // 초상 이미지가 안 뜨는 만일의 상황을 대비해 무료 방식 속성도 같이 준비해둔다
+      if (!state.analysis) {
+        state.analysis = await P.analyzeFile(file).catch(() => ({
+          detected: false, skin: S.SKINS[1], hairColor: S.HAIR_COLORS[1], topColor: '#2b3038', longHair: false,
+        }));
+      }
+      const res = await api('/api/portrait', { method: 'POST', body: { dataUrl: state.aiSquareDataUrl } });
+      state.aiPortraitUrl = res.url;
+      state.draft = S.normalize(P.attrsFromAnalysis(state.analysis, 'ai:' + Date.now()));
+      $('#aiPreviewImg').src = res.url;
+      $('#aiError').hidden = true;
+      showStep('aiResult');
+    } catch (err) {
+      toast(err.message || 'AI 생성에 실패했어요');
+      showStep('mode');
+    }
+  }
+
+  $('#aiNext').addEventListener('click', showInfo);
 
   function buildCandidates() {
     const base = state.analysis;
@@ -761,6 +859,19 @@
     c.clearRect(0, 0, cv.width, cv.height);
     const w = S.W * scale, h = S.H * scale;
     S.drawTo(c, attrs, scale, Math.round((cv.width - w) / 2), Math.round((cv.height - h) / 2));
+  }
+
+  // AI 초상화가 있으면 이미지를, 없으면 절차적 픽셀 캐릭터를 미리보기에 보여준다
+  function showCharPreview(canvas, img, attrs) {
+    if (state.aiPortraitUrl) {
+      img.src = state.aiPortraitUrl;
+      img.hidden = false;
+      canvas.hidden = true;
+    } else {
+      canvas.hidden = false;
+      img.hidden = true;
+      drawPreview(canvas, attrs, 3);
+    }
   }
 
   function buildCustomControls() {
@@ -842,7 +953,7 @@
   }
 
   function showInfo() {
-    drawPreview($('#infoPreview'), state.draft, 3);
+    showCharPreview($('#infoPreview'), $('#infoPreviewImg'), state.draft);
     $('#infoError').hidden = true;
     showStep('info');
     setTimeout(() => $('#nameInput').focus(), 100);
@@ -861,7 +972,9 @@
     btn.disabled = true;
     btn.textContent = '등록 중…';
     try {
-      const created = await api('/api/entries', { method: 'POST', body: { name, message, attrs: state.draft } });
+      const body = { name, message, attrs: state.draft };
+      if (state.aiPortraitUrl) body.portraitUrl = state.aiPortraitUrl;
+      const created = await api('/api/entries', { method: 'POST', body });
       state.myId = created.id;
       state.myPos = null; // rebuildHomes에서 새 자리로 다시 잡는다
       localStorage.setItem('pg_my_id', created.id);
@@ -869,7 +982,7 @@
       state.enteringUntil = Date.now() + 1600;
       await refresh();
       if (message) state.bubbles.set(created.id, Date.now() + 5600);
-      drawPreview($('#donePreview'), state.draft, 3);
+      showCharPreview($('#donePreview'), $('#donePreviewImg'), state.draft);
       showStep('done');
       focusEntry(created.id);
     } catch (e) {
@@ -895,7 +1008,15 @@
   function entryRow(e, opts) {
     const row = document.createElement('div');
     row.className = 'entry';
-    row.appendChild(S.toCanvas(e.attrs, 1.1));
+    if (e.portraitUrl) {
+      const img = document.createElement('img');
+      img.src = e.portraitUrl;
+      img.alt = e.name;
+      img.style.cssText = 'width:44px;height:44px;object-fit:contain;flex:none;border-radius:8px;background:#0e1014;';
+      row.appendChild(img);
+    } else {
+      row.appendChild(S.toCanvas(e.attrs, 1.1));
+    }
     const body = document.createElement('div');
     body.className = 'entry-body';
     const n = document.createElement('div');
@@ -1208,6 +1329,8 @@
   }
   // 네트워크가 느려도 화면이 계속 로딩 상태로 멈춰있지 않도록 안전장치를 둔다
   setTimeout(hideLoadingScreen, 4000);
+
+  api('/api/portrait/status').then((r) => { state.aiAvailable = !!r.available; }).catch(() => {});
 
   refresh().then(() => {
     hideLoadingScreen();

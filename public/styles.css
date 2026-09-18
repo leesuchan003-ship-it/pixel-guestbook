@@ -231,6 +231,24 @@ html, body {
 .drop-sub { font-size: 12px; color: var(--muted); }
 .privacy { font-size: 11px; color: #6e7480; text-align: center; margin: 10px 0 0; line-height: 1.5; }
 
+/* 캐릭터 만들기: AI vs 무료 방식 선택 */
+.mode-btn {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  background: #0e1014; border: 2px solid var(--line); border-radius: 14px;
+  padding: 14px; margin-bottom: 10px; cursor: pointer; text-align: left; font-family: inherit;
+}
+.mode-btn.mode-ai { border-color: var(--accent); background: #1d1b12; }
+.mode-ico { font-size: 24px; flex: none; }
+.mode-text { display: flex; flex-direction: column; gap: 3px; color: var(--ink); }
+.mode-text b { font-size: 15px; }
+.mode-text small { font-size: 11px; color: var(--muted); font-weight: 400; }
+
+.ai-preview {
+  width: 200px; height: 200px; object-fit: contain;
+  background: #0e1014; border: 2px solid var(--line); border-radius: 14px;
+  image-rendering: pixelated;
+}
+
 .loader { display: flex; gap: 8px; justify-content: center; padding: 26px 0; }
 .loader span {
   width: 12px; height: 12px; background: var(--ink);

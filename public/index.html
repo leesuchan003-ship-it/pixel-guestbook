@@ -58,12 +58,25 @@
         <span class="drop-main">사진 올리기</span>
         <span class="drop-sub">얼굴이 잘 나온 사진이면 더 잘 만들어져요</span>
       </label>
-      <p class="privacy">사진은 브라우저 안에서만 분석되고 서버로 전송·저장되지 않습니다.</p>
+      <p class="privacy" id="privacyNote">무료 방식은 브라우저 안에서만 분석되고 서버로 전송되지 않아요. AI 방식을 고르면 사진이 AI 서버로 전송됩니다.</p>
       <button class="ghost" id="skipPhoto">사진 없이 직접 꾸미기</button>
     </div>
 
+    <div class="step" data-step="mode" hidden>
+      <h2>어떻게 만들까요?</h2>
+      <p class="sub">AI는 실제 사진과 훨씬 닮게 만들어줘요 (10~20초 정도 걸려요)</p>
+      <button class="mode-btn mode-ai" id="chooseAi">
+        <span class="mode-ico">✨</span>
+        <span class="mode-text"><b>AI로 나와 닮게 만들기</b><small>사진이 외부 AI 서버로 전송됩니다</small></span>
+      </button>
+      <button class="mode-btn" id="chooseFree">
+        <span class="mode-ico">⚡</span>
+        <span class="mode-text"><b>빠르게 만들기</b><small>무료 · 색상만 비슷하게, 즉시 완성</small></span>
+      </button>
+    </div>
+
     <div class="step" data-step="loading" hidden>
-      <h2>캐릭터 만드는 중</h2>
+      <h2 id="loadingTitle">캐릭터 만드는 중</h2>
       <div class="loader"><span></span><span></span><span></span></div>
       <p class="sub" id="loadingMsg">사진을 분석하고 있어요…</p>
     </div>
@@ -79,6 +92,18 @@
       <button class="primary" id="pickNext" disabled>이 캐릭터로 할래요</button>
     </div>
 
+    <div class="step" data-step="aiResult" hidden>
+      <h2>✨ AI가 그려준 캐릭터</h2>
+      <p class="sub">마음에 안 들면 다시 만들거나 무료 방식으로 바꿀 수 있어요</p>
+      <div class="preview-box"><img id="aiPreviewImg" class="ai-preview" alt="AI가 생성한 캐릭터"></div>
+      <div class="row-btns">
+        <button class="ghost" id="aiRegenerate">다시 만들기</button>
+        <button class="ghost" id="aiToFree">무료 방식으로</button>
+      </div>
+      <button class="primary" id="aiNext">이 캐릭터로 할래요</button>
+      <p class="sub" id="aiError" hidden></p>
+    </div>
+
     <div class="step" data-step="custom" hidden>
       <h2>직접 꾸미기</h2>
       <div class="custom-wrap">
@@ -90,7 +115,10 @@
 
     <div class="step" data-step="info" hidden>
       <h2>이름과 축하 메시지</h2>
-      <div class="preview-box small"><canvas id="infoPreview" width="110" height="164"></canvas></div>
+      <div class="preview-box small">
+        <canvas id="infoPreview" width="110" height="164"></canvas>
+        <img id="infoPreviewImg" class="ai-preview" style="width:110px;height:164px;" hidden alt="내 캐릭터">
+      </div>
       <input id="nameInput" class="field" maxlength="12" placeholder="이름 (예: 최명원)" autocomplete="off">
       <textarea id="msgInput" class="field" maxlength="60" rows="2" placeholder="캐릭터 대사 (예: 결혼 축하해!!)"></textarea>
       <p class="sub" id="infoError" hidden></p>
@@ -100,7 +128,10 @@
     <div class="step" data-step="done" hidden>
       <h2>등록 완료!</h2>
       <p class="sub">식장에 캐릭터가 입장했어요</p>
-      <div class="preview-box small"><canvas id="donePreview" width="110" height="164"></canvas></div>
+      <div class="preview-box small">
+        <canvas id="donePreview" width="110" height="164"></canvas>
+        <img id="donePreviewImg" class="ai-preview" style="width:110px;height:164px;" hidden alt="내 캐릭터">
+      </div>
       <button class="primary" data-close>내 캐릭터 보러가기</button>
     </div>
   </div>
